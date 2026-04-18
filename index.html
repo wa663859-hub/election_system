@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Face Verification</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Cairo:wght@300;400;700&display=swap');
+         :root {
+            --bg: #0a0a0f;
+            --surface: #111118;
+            --border: #1e1e2e;
+            --accent: #235FA4;
+            --accent-dim: rgba(0, 212, 170, 0.12);
+            --red: #ff4466;
+            --red-dim: rgba(255, 68, 102, 0.12);
+            --text: #e8e8f0;
+            --muted: #555570;
+            --radius: 12px;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Cairo', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 32px 16px;
+            gap: 24px;
+        }
+        
+        header {
+            text-align: center;
+        }
+        
+        header h1 {
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            color: var(--accent);
+            font-family: 'IBM Plex Mono', monospace;
+        }
+        
+        header p {
+            color: var(--muted);
+            font-size: 13px;
+            margin-top: 4px;
+            font-weight: 300;
+        }
+        
+        .camera-wrap {
+            position: relative;
+            width: min(480px, 100%);
+            aspect-ratio: 4/3;
+            border-radius: var(--radius);
+            overflow: hidden;
+            border: 1px solid var(--border);
+            background: #050508;
+        }
+        
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            /* mirror */
+            display: block;
+        }
+        
+        canvas#overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        /* scanning line animation */
+        
+        .scan-line {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            animation: scan 2.4s linear infinite;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .scan-line.active {
+            opacity: 1;
+        }
+        
+        @keyframes scan {
+            0% {
+                top: 0%;
+            }
+            100% {
+                top: 100%;
+            }
+        }
+        /* corner brackets */
+        
+        .bracket {
+            position: absolute;
+            width: 36px;
+            height: 36px;
+            border-color: var(--accent);
+            border-style: solid;
+            border-width: 0;
+            opacity: 0.5;
+            transition: opacity 0.3s, border-color 0.3s;
+        }
+        
+        .bracket.tl {
+            top: 12px;
+            left: 12px;
+            border-top-width: 2px;
+            border-left-width: 2px;
+            border-radius: 4px 0 0 0;
+        }
+        
+        .bracket.tr {
+            top: 12px;
+            right: 12px;
+            border-top-width: 2px;
+            border-right-width: 2px;
+            border-radius: 0 4px 0 0;
+        }
+        
+        .bracket.bl {
+            bottom: 12px;
+            left: 12px;
+            border-bottom-width: 2px;
+            border-left-width: 2px;
+            border-radius: 0 0 0 4px;
+        }
+        
+        .bracket.br {
+            bottom: 12px;
+            right: 12px;
+            border-bottom-width: 2px;
+            border-right-width: 2px;
+            border-radius: 0 0 4px 0;
+        }
+        
+        .camera-wrap.face-detected .bracket {
+            opacity: 1;
+        }
+        
+        .camera-wrap.matched .bracket {
+            border-color: var(--accent);
+        }
+        
+        .camera-wrap.rejected .bracket {
+            border-color: var(--red);
+        }
+        /* status badge */
+        
+        .badge {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 11px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            background: rgba(10, 10, 15, 0.85);
+            backdrop-filter: blur(8px);
+            white-space: nowrap;
+            color: var(--muted);
+            transition: all 0.3s;
+        }
+        
+        .badge.scanning {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+        
+        .badge.matched {
+            color: var(--accent);
+            border-color: var(--accent);
+            background: rgba(0, 212, 170, 0.1);
+        }
+        
+        .badge.rejected {
+            color: var(--red);
+            border-color: var(--red);
+            background: rgba(255, 68, 102, 0.1);
+        }
+        /* result card */
+        
+        .result-card {
+            width: min(480px, 100%);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: var(--surface);
+            padding: 20px 24px;
+            display: none;
+            gap: 12px;
+            flex-direction: column;
+        }
+        
+        .result-card.show {
+            display: flex;
+        }
+        
+        .result-card .verdict {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        
+        .result-card .verdict.ok {
+            color: var(--accent);
+        }
+        
+        .result-card .verdict.fail {
+            color: var(--red);
+        }
+        
+        .result-card .icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+        
+        .icon.ok {
+            background: var(--accent-dim);
+        }
+        
+        .icon.fail {
+            background: var(--red-dim);
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        .metric {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+        }
+        
+        .metric label {
+            font-size: 10px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-family: 'IBM Plex Mono', monospace;
+            display: block;
+            margin-bottom: 4px;
+        }
+        
+        .metric span {
+            font-size: 16px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-weight: 600;
+        }
+        /* progress bar for distance */
+        
+        .distance-bar {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        
+        .distance-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.6s ease;
+        }
+        
+        .btn-retry {
+            background: var(--border);
+            color: var(--text);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-family: 'Cairo', sans-serif;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .btn-retry:hover {
+            background: #2a2a3e;
+        }
+        /* error */
+        
+        .error-msg {
+            width: min(480px, 100%);
+            padding: 12px 16px;
+            border-radius: var(--radius);
+            border: 1px solid var(--red);
+            background: var(--red-dim);
+            color: var(--red);
+            font-size: 13px;
+            display: none;
+        }
+        
+        .error-msg.show {
+            display: block;
+        }
+        
+        .loading-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            padding: 48px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+        
+        .spinner {
+            width: 28px;
+            height: 28px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h1>FACE VERIFY</h1>
+        <p>ضع وجهك في الإطار — ستبدأ المقارنة تلقائياً</p>
+    </header>
+
+    <div class="camera-wrap" id="camWrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="scan-line" id="scanLine"></div>
+        <div class="bracket tl"></div>
+        <div class="bracket tr"></div>
+        <div class="bracket bl"></div>
+        <div class="bracket br"></div>
+        <div class="badge" id="badge">جارٍ تشغيل الكاميرا...</div>
+    </div>
+
+    <div class="result-card" id="resultCard">
+        <div class="verdict" id="verdict"></div>
+        <div class="metrics">
+            <div class="metric">
+                <label>المسافة</label>
+                <span id="metricDist">—</span>
+                <div class="distance-bar">
+                    <div class="distance-fill" id="distFill" style="width:0%"></div>
+                </div>
+            </div>
+            <div class="metric">
+                <label>الحد المسموح</label>
+                <span id="metricThresh">—</span>
+            </div>
+        </div>
+        <button class="btn-retry" id="btnRetry">المحاولة مجدداً ↺</button>
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <script>
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const camWrap = document.getElementById('camWrap');
+        const scanLine = document.getElementById('scanLine');
+        const badge = document.getElementById('badge');
+        const resultCard = document.getElementById('resultCard');
+        const errorMsg = document.getElementById('errorMsg');
+
+        const ctx = overlay.getContext('2d');
+
+        let faceDetected = false;
+        let holdTimer = null;
+        let capturing = false;
+        let done = false;
+        const HOLD_MS = 800; // time face must stay in frame before capture
+
+        // ── 1. Start camera ─────────────────────────────────────────────────
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: {
+                            ideal: 640
+                        },
+                        height: {
+                            ideal: 480
+                        }
+                    }
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    overlay.width = video.videoWidth;
+                    overlay.height = video.videoHeight;
+                    badge.textContent = 'ابحث عن وجهك في الإطار';
+                    startLoop();
+                };
+            } catch (e) {
+                showError('تعذّر الوصول إلى الكاميرا: ' + e.message);
+            }
+        }
+
+        // ── 2. Detection loop using skin-tone heuristic ───────────────────
+        // We use a simple canvas-based skin detector (no heavy library needed).
+        // Checks that a meaningful blob of skin-toned pixels appears near center.
+        function detectFaceHeuristic() {
+            const w = overlay.width,
+                h = overlay.height;
+            // Sample every 8th pixel for speed
+            const step = 8;
+            // Offscreen sample
+            const tmp = document.createElement('canvas');
+            tmp.width = w;
+            tmp.height = h;
+            const tc = tmp.getContext('2d');
+            tc.drawImage(video, 0, 0, w, h);
+            const data = tc.getImageData(0, 0, w, h).data;
+
+            // Region of interest: central 60% × 70%
+            const x0 = w * 0.20,
+                x1 = w * 0.80;
+            const y0 = h * 0.10,
+                y1 = h * 0.80;
+
+            let skinPx = 0,
+                total = 0;
+            for (let y = y0; y < y1; y += step) {
+                for (let x = x0; x < x1; x += step) {
+                    const i = (Math.round(y) * w + Math.round(x)) * 4;
+                    const r = data[i],
+                        g = data[i + 1],
+                        b = data[i + 2];
+                    total++;
+                    if (isSkin(r, g, b)) skinPx++;
+                }
+            }
+            return (skinPx / total) > 0.14; // at least 14% skin pixels
+        }
+
+        function isSkin(r, g, b) {
+            // Simple RGB skin range
+            return r > 80 && g > 40 && b > 20 &&
+                r > g && r > b &&
+                (r - Math.min(g, b)) > 15 &&
+                Math.abs(r - g) > 10;
+        }
+
+        // ── 3. Main loop ─────────────────────────────────────────────────────
+        function startLoop() {
+            function loop() {
+                if (done) return;
+                const detected = detectFaceHeuristic();
+
+                if (detected !== faceDetected) {
+                    faceDetected = detected;
+                    camWrap.classList.toggle('face-detected', detected);
+                    scanLine.classList.toggle('active', detected);
+
+                    if (detected) {
+                        badge.textContent = 'وجه مكتشف — ابقَ ثابتاً...';
+                        badge.className = 'badge scanning';
+                        holdTimer = setTimeout(() => {
+                            if (!capturing && !done) captureAndVerify();
+                        }, HOLD_MS);
+                    } else {
+                        badge.textContent = 'ابحث عن وجهك في الإطار';
+                        badge.className = 'badge';
+                        clearTimeout(holdTimer);
+                    }
+                }
+
+                // Draw face box hint on overlay
+                ctx.clearRect(0, 0, overlay.width, overlay.height);
+                if (detected) {
+                    const cx = overlay.width / 2,
+                        cy = overlay.height * 0.42;
+                    const bw = overlay.width * 0.38,
+                        bh = overlay.height * 0.55;
+                    ctx.strokeStyle = 'rgba(0,212,170,0.5)';
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([6, 4]);
+                    ctx.strokeRect(cx - bw / 2, cy - bh / 2, bw, bh);
+                    ctx.setLineDash([]);
+                }
+
+                requestAnimationFrame(loop);
+            }
+            requestAnimationFrame(loop);
+        }
+
+        // ── 4. Capture & send to API ─────────────────────────────────────────
+        async function captureAndVerify() {
+            capturing = true;
+            done = true;
+
+            badge.textContent = 'جارٍ التحقق...';
+            badge.className = 'badge scanning';
+            scanLine.classList.add('active');
+
+            // Grab frame from video (mirror-correct for sending — no transform)
+            const snap = document.createElement('canvas');
+            snap.width = video.videoWidth;
+            snap.height = video.videoHeight;
+            const sc = snap.getContext('2d');
+            sc.drawImage(video, 0, 0); // real (non-mirrored) frame
+
+            snap.toBlob(async(blob) => {
+                try {
+                    const form = new FormData();
+                    form.append('image', blob, 'capture.jpg');
+
+                    const resp = await fetch('/verify', {
+                        method: 'POST',
+                        body: form
+                    });
+                    if (!resp.ok) {
+                        const err = await resp.json().catch(() => ({}));
+                        throw new Error(err.detail || `Server error ${resp.status}`);
+                    }
+
+                    const data = await resp.json();
+                    showResult(data);
+                } catch (e) {
+                    showError(e.message);
+                    done = false;
+                    capturing = false;
+                }
+            }, 'image/jpeg', 0.92);
+        }
+
+        // ── 5. Show result ───────────────────────────────────────────────────
+        function showResult({
+            matched,
+            distance,
+            threshold
+        }) {
+            const pct = Math.min(100, Math.round((distance / 1.0) * 100));
+            const ok = matched;
+
+            camWrap.classList.add(ok ? 'matched' : 'rejected');
+            scanLine.classList.remove('active');
+
+            badge.textContent = ok ? '✓ مطابق' : '✗ غير مطابق';
+            badge.className = ok ? 'badge matched' : 'badge rejected';
+
+            const verdict = document.getElementById('verdict');
+            verdict.className = ok ? 'verdict ok' : 'verdict fail';
+            verdict.innerHTML = `
+    <div class="icon ${ok ? 'ok' : 'fail'}">${ok ? '✓' : '✗'}</div>
+    <span>${ok ? 'تم التحقق بنجاح' : 'لا تطابق'}</span>`;
+
+            document.getElementById('metricDist').textContent = distance.toFixed(4);
+            document.getElementById('metricThresh').textContent = threshold.toFixed(4);
+
+            const fill = document.getElementById('distFill');
+            fill.style.width = pct + '%';
+            fill.style.background = ok ? 'var(--accent)' : 'var(--red)';
+
+            resultCard.classList.add('show');
+
+            document.getElementById('btnRetry').onclick = () => location.reload();
+        }
+
+        // ── 6. Error display ────────────────────────────────────────────────
+        function showError(msg) {
+            errorMsg.textContent = '⚠ ' + msg;
+            errorMsg.classList.add('show');
+            badge.textContent = 'حدث خطأ';
+            badge.className = 'badge rejected';
+            scanLine.classList.remove('active');
+        }
+
+        // ── Start ────────────────────────────────────────────────────────────
+        startCamera();
+    </script>
+</body>
+
+</html>

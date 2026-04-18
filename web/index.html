@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>التحقق من الوجه</title>
+    <style>
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+
+        body {
+            display: grid;
+            place-items: center;
+        }
+
+        .stage {
+            position: relative;
+            width: min(90vw, 900px);
+            aspect-ratio: 4 / 3;
+            background: #000;
+            overflow: hidden;
+            border-radius: 20px;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+
+        .start-button {
+            position: absolute;
+            left: 50%;
+            bottom: 20px;
+            transform: translateX(-50%);
+            padding: 10px 18px;
+            border: none;
+            border-radius: 999px;
+            background: rgba(0, 212, 170, 0.95);
+            color: #050505;
+            font-size: 15px;
+            cursor: pointer;
+            font-family: Arial, sans-serif;
+            transition: transform 0.2s ease, opacity 0.2s ease;
+        }
+
+        .start-button:hover {
+            transform: translateX(-50%) scale(1.02);
+        }
+
+        .start-button.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .status {
+            position: absolute;
+            left: 16px;
+            right: 16px;
+            bottom: 56px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(0, 0, 0, 0.55);
+            color: #fff;
+            text-align: center;
+            font-size: 18px;
+            line-height: 1.5;
+        }
+
+        .info-panel {
+            position: absolute;
+            left: 16px;
+            right: 16px;
+            bottom: 16px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: rgba(0, 0, 0, 0.45);
+            color: #ddd;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        canvas {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <main class="stage">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="status" id="status">تأكد من ظهور وجهك بوضوح</div>
+        <button class="start-button hidden" id="startButton">أعد المحاولة</button>
+    </main>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const video = document.getElementById("video");
+        const canvas = document.getElementById("canvas");
+        const statusBox = document.getElementById("status");
+        const startButton = document.getElementById("startButton");
+
+        const livenessChallenges = [
+            {
+                key: "move_side",
+                label: "حرّك وجهك قليلاً جانبًا",
+                check(metrics, baseline) {
+                    return metrics.detected && baseline && Math.abs(metrics.center_x_ratio - baseline.center_x_ratio) > 0.08;
+                }
+            },
+            {
+                key: "move_closer",
+                label: "اقترب بوجهك من الكاميرا",
+                check(metrics, baseline) {
+                    return metrics.detected && baseline && metrics.width_ratio > baseline.width_ratio + 0.08;
+                }
+            },
+            {
+                key: "move_away",
+                label: "ابتعد بوجهك قليلاً عن الكاميرا",
+                check(metrics, baseline) {
+                    return metrics.detected && baseline && metrics.width_ratio < baseline.width_ratio - 0.08;
+                }
+            }
+        ];
+
+        let mediaStream = null;
+        let scanTimer = null;
+        let isUploading = false;
+        let finished = false;
+        let checkedFrames = 0;
+        let currentThreshold = 0.42;
+        let livenessPassed = false;
+        let baselineMetrics = null;
+        let selectedChallenge = null;
+        let livenessAttempts = 0;
+        const requiredFrames = 1;
+        const maxLivenessAttempts = 8;
+
+        function setStatus(message) {
+            statusBox.textContent = message;
+        }
+
+        function showStartButton() {
+            startButton.classList.remove("hidden");
+        }
+
+        function hideStartButton() {
+            startButton.classList.add("hidden");
+        }
+
+        function stopLoop() {
+            if (scanTimer) {
+                clearInterval(scanTimer);
+                scanTimer = null;
+            }
+        }
+
+        function randomChallenge() {
+            return livenessChallenges[Math.floor(Math.random() * livenessChallenges.length)];
+        }
+
+        async function startCamera() {
+            hideStartButton();
+            setStatus("جارٍ فتح الكاميرا...");
+
+            if (mediaStream) {
+                mediaStream.getTracks().forEach((track) => track.stop());
+            }
+
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: "user",
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                });
+            } catch (error) {
+                const message = error.name === "NotAllowedError"
+                    ? "يرجى السماح باستخدام الكاميرا"
+                    : error.name === "NotFoundError"
+                        ? "لم يتم العثور على كاميرا"
+                        : "تعذر فتح الكاميرا";
+                setStatus(message);
+                startButton.textContent = "أعد المحاولة";
+                showStartButton();
+                return;
+            }
+
+            video.srcObject = mediaStream;
+            await video.play();
+
+            checkedFrames = 0;
+            currentThreshold = 0.42;
+            livenessPassed = false;
+            baselineMetrics = null;
+            selectedChallenge = randomChallenge();
+            livenessAttempts = 0;
+
+            setStatus(`التحقق من الحيوية: ${selectedChallenge.label}`);
+            scanTimer = setInterval(processFrame, 400);
+        }
+
+        function captureBlob() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            return new Promise((resolve) => {
+                canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.75);
+            });
+        }
+
+        async function sendFrame(url, blob) {
+            const formData = new FormData();
+            formData.append("image", blob, "capture.jpg");
+            const response = await fetch(url, {
+                method: "POST",
+                body: formData
+            });
+            const data = await response.json();
+            return { response, data };
+        }
+
+        async function processFrame() {
+            if (!mediaStream || isUploading || finished || video.readyState < 2) {
+                return;
+            }
+
+            isUploading = true;
+
+            try {
+                const blob = await captureBlob();
+                if (!blob) {
+                    return;
+                }
+
+                if (!livenessPassed) {
+                    const { response, data } = await sendFrame("/analyze-frame", blob);
+                    if (!response.ok) {
+                        setStatus(data.detail || "فشل التحقق من الحيوية");
+                        return;
+                    }
+
+                    if (!data.detected) {
+                        setStatus(`أظهر وجهك. ${selectedChallenge.label}`);
+                        return;
+                    }
+
+                    if (!baselineMetrics) {
+                        baselineMetrics = data;
+                        livenessAttempts = 0;
+                        setStatus(`${selectedChallenge.label}`);
+                        return;
+                    }
+
+                    if (!selectedChallenge.check(data, baselineMetrics)) {
+                        livenessAttempts += 1;
+                        if (livenessAttempts >= maxLivenessAttempts) {
+                            selectedChallenge = randomChallenge();
+                            baselineMetrics = null;
+                            livenessAttempts = 0;
+                            setStatus(`حاول مرة أخرى: ${selectedChallenge.label}`);
+                            return;
+                        }
+
+                        setStatus(`${selectedChallenge.label}`);
+                        return;
+                    }
+
+                    livenessPassed = true;
+                    setStatus("تم التحقق من الحيوية، جارٍ التحقق من الهوية...");
+                    return;
+                }
+
+                const { response, data } = await sendFrame("/verify-frame", blob);
+                if (!response.ok) {
+                    if (String(data.detail || "").includes("No face detected")) {
+                        setStatus("انتظر وجهك...");
+                        return;
+                    }
+                    setStatus(data.detail || "فشل التحقق");
+                    return;
+                }
+
+                if (data.status === "waiting") {
+                    setStatus("انتظر وجهك...");
+                    return;
+                }
+
+                if (data.status === "frame_checked") {
+                    finished = true;
+                    stopLoop();
+                    if (data.matched) {
+                        setStatus("مطابق");
+                        hideStartButton();
+                    } else {
+                        setStatus("غير مطابق");
+                        startButton.textContent = "حاول مرة أخرى";
+                        showStartButton();
+                    }
+                }
+            } catch (error) {
+                setStatus("فشل اتصال الخادم");
+                console.error(error);
+            } finally {
+                isUploading = false;
+            }
+        }
+
+        window.addEventListener("load", () => {
+            startCamera();
+        });
+
+        startButton.addEventListener("click", () => {
+            startCamera();
+        });
+
+        window.addEventListener("beforeunload", () => {
+            stopLoop();
+            if (mediaStream) {
+                mediaStream.getTracks().forEach((track) => track.stop());
+            }
+        });
+    </script>
+</body>
+</html>
